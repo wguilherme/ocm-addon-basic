@@ -155,25 +155,29 @@ make undeploy
 
 ## Arquitetura
 
-```
-HUB CLUSTER                              SPOKE CLUSTER
-┌────────────────────────────────┐      ┌────────────────────────────────┐
-│                                │      │                                │
-│  ClusterManagementAddOn        │      │  Namespace: ocm-agent-addon    │
-│  "basic-addon"                 │      │  ┌────────────────────────┐   │
-│         │                      │      │  │ Deployment:            │   │
-│         ▼                      │      │  │ basic-addon-agent      │   │
-│  ManagedClusterAddOn           │      │  │                        │   │
-│  namespace: spoke1             │      │  │ Pod: busybox           │   │
-│         │                      │      │  │ > Hello from spoke!    │   │
-│         ▼                      │      │  └────────────────────────┘   │
-│  Addon Controller ─────────────┼──────┼───► ManifestWork applied      │
-│         │                      │      │                                │
-│         ▼                      │      │                                │
-│  ManifestWork                  │      │                                │
-│  "addon-basic-addon-deploy-0"  │      │                                │
-│                                │      │                                │
-└────────────────────────────────┘      └────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph HUB["HUB CLUSTER"]
+        CMA["ClusterManagementAddOn<br/>basic-addon"]
+        MCA["ManagedClusterAddOn<br/>namespace: spoke1"]
+        AC["Addon Controller"]
+        MW["ManifestWork<br/>addon-basic-addon-deploy-0"]
+
+        CMA --> MCA
+        MCA --> AC
+        AC --> MW
+    end
+
+    subgraph SPOKE["SPOKE CLUSTER"]
+        NS["Namespace:<br/>ocm-agent-addon"]
+        DEP["Deployment:<br/>basic-addon-agent"]
+        POD["Pod: busybox<br/>Hello from spoke!"]
+
+        NS --> DEP
+        DEP --> POD
+    end
+
+    MW -->|"Work Agent<br/>sincroniza"| DEP
 ```
 
 ## Referências
