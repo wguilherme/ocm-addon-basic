@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: basic-addon-controller
+  namespace: open-cluster-management
+  labels:
+    app: basic-addon-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: basic-addon-controller
+  template:
+    metadata:
+      labels:
+        app: basic-addon-controller
+    spec:
+      serviceAccountName: basic-addon-sa
+      containers:
+        - name: controller
+          image: basic-addon:latest
+          imagePullPolicy: IfNotPresent

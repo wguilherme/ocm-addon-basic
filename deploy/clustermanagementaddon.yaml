@@ -1,0 +1,8 @@
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: ClusterManagementAddOn
+metadata:
+  name: basic-addon
+spec:
+  addOnMeta:
+    displayName: Basic Addon
+    description: "Basic addon example that logs hello world on managed clusters"
