@@ -3,16 +3,15 @@ HUB_KUBECONFIG ?= ~/.kube/local/platform-operator/config.hub
 KIND_HUB ?= hub
 KIND_SPOKE ?= spoke1
 
-.PHONY: build run test tidy docker-build docker-push deploy deploy-rbac undeploy enable disable kind-load addon-deploy addon-reports
+.PHONY: build run test tidy docker-build docker-push deploy deploy-rbac undeploy enable disable kind-load addon-deploy addon-reports test-addon-operator-kind-prepare
 
 # Build binary locally
 build:
 	go build -o bin/addon ./cmd/addon
 
 # Run controller locally (like kubebuilder's make run)
-# Prerequisites: kubectl context pointing to hub cluster, RBAC applied
-run: build
-	./bin/addon controller
+run: build deploy-rbac
+	./bin/addon controller --kubeconfig=$$(eval echo $(HUB_KUBECONFIG))
 
 # Run tests
 test:
@@ -30,12 +29,14 @@ docker-build:
 docker-push:
 	docker push $(IMAGE)
 
-# Deploy RBAC only (for local development with make run)
+# Deploy RBAC and addon config (for local development with make run)
 deploy-rbac:
-	kubectl apply -f deploy/serviceaccount.yaml
-	kubectl apply -f deploy/clusterrole.yaml
-	kubectl apply -f deploy/clusterrolebinding.yaml
-	kubectl apply -f deploy/clustermanagementaddon.yaml
+	KUBECONFIG=$(HUB_KUBECONFIG) kubectl apply -f deploy/serviceaccount.yaml
+	KUBECONFIG=$(HUB_KUBECONFIG) kubectl apply -f deploy/clusterrole.yaml
+	KUBECONFIG=$(HUB_KUBECONFIG) kubectl apply -f deploy/clusterrolebinding.yaml
+	KUBECONFIG=$(HUB_KUBECONFIG) kubectl apply -f deploy/managedclustersetbinding.yaml
+	KUBECONFIG=$(HUB_KUBECONFIG) kubectl apply -f deploy/placement.yaml
+	KUBECONFIG=$(HUB_KUBECONFIG) kubectl apply -f deploy/clustermanagementaddon.yaml
 
 # Deploy to hub cluster (full deployment including controller pod)
 deploy: deploy-rbac
@@ -68,10 +69,11 @@ check-report:
 	@if [ -z "$(CLUSTER)" ]; then echo "Usage: make check-report CLUSTER=<cluster-name>"; exit 1; fi
 	kubectl get configmap pod-report -n $(CLUSTER) -o jsonpath='{.data.report}' | jq .
 
-# Build docker image and load into Kind hub cluster
+# Build docker image and load into Kind clusters (hub + spoke)
 kind-load:
 	cd .. && docker build -t $(IMAGE) -f addon-framework-basic/Dockerfile .
 	kind load docker-image $(IMAGE) --name $(KIND_HUB)
+	kind load docker-image $(IMAGE) --name $(KIND_SPOKE)
 
 # Apply all specs to hub cluster
 addon-deploy:
@@ -90,3 +92,15 @@ addon-reports:
 addon-report:
 	@if [ -z "$(CLUSTER)" ]; then echo "Usage: make addon-report CLUSTER=<cluster-name>"; exit 1; fi
 	@KUBECONFIG=$(HUB_KUBECONFIG) kubectl get configmap pod-report -n $(CLUSTER) -o jsonpath='{.data.report}' | jq .
+
+# Full setup: build image, load into Kind clusters, deploy everything
+test-addon-operator-kind-prepare: kind-load addon-deploy
+	@echo "=== Addon operator deployed ==="
+	@echo "Waiting for controller to be ready..."
+	@KUBECONFIG=$(HUB_KUBECONFIG) kubectl wait --for=condition=available deployment/basic-addon-controller -n open-cluster-management --timeout=60s
+	@echo "Controller ready. Checking placement..."
+	@KUBECONFIG=$(HUB_KUBECONFIG) kubectl get placement -n open-cluster-management
+	@echo "Checking managed cluster addons..."
+	@KUBECONFIG=$(HUB_KUBECONFIG) kubectl get managedclusteraddon -A
+	@echo ""
+	@echo "Done! Use 'make addon-reports' to check pod reports from spokes."
