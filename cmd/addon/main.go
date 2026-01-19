@@ -2,78 +2,111 @@ package main
 
 import (
 	"context"
-	"embed"
+	goflag "flag"
+	"fmt"
+	"math/rand"
 	"os"
+	"time"
 
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
+	utilflag "k8s.io/component-base/cli/flag"
 	"k8s.io/klog/v2"
 
 	"open-cluster-management.io/addon-framework/pkg/addonfactory"
 	"open-cluster-management.io/addon-framework/pkg/addonmanager"
-	"open-cluster-management.io/addon-framework/pkg/agent"
+	cmdfactory "open-cluster-management.io/addon-framework/pkg/cmd/factory"
+	"open-cluster-management.io/addon-framework/pkg/version"
+
+	"github.com/totvs/addon-framework-basic/pkg/addon"
+	"github.com/totvs/addon-framework-basic/pkg/agent"
 )
 
-//go:embed manifests
-var FS embed.FS
-
-const addonName = "basic-addon"
-
 func main() {
-	kubeConfig, err := getKubeConfig()
-	if err != nil {
-		klog.Errorf("failed to get kubeconfig: %v", err)
-		os.Exit(1)
+	rand.Seed(time.Now().UTC().UnixNano())
+
+	pflag.CommandLine.SetNormalizeFunc(utilflag.WordSepNormalizeFunc)
+	pflag.CommandLine.AddGoFlagSet(goflag.CommandLine)
+
+	command := newCommand()
+	// teste 
+	if err := command.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		
+		
 	}
-
-	addonMgr, err := addonmanager.New(kubeConfig)
-	if err != nil {
-		klog.Errorf("unable to setup addon manager: %v", err)
-		os.Exit(1)
-	}
-
-	agentAddon, err := addonfactory.NewAgentAddonFactory(addonName, FS, "manifests").
-		WithAgentHealthProber(&agent.HealthProber{
-			Type: agent.HealthProberTypeDeploymentAvailability,
-		}).
-		BuildTemplateAgentAddon()
-	if err != nil {
-		klog.Errorf("failed to build agent addon: %v", err)
-		os.Exit(1)
-	}
-
-	err = addonMgr.AddAgent(agentAddon)
-	if err != nil {
-		klog.Errorf("failed to add addon agent: %v", err)
-		os.Exit(1)
-	}
-
-	ctx := context.Background()
-	go func() {
-		if err := addonMgr.Start(ctx); err != nil {
-			klog.Fatal(err)
-		}
-	}()
-
-	<-ctx.Done()
 }
 
-// getKubeConfig returns kubeconfig for the addon manager.
-// It tries in-cluster config first, then falls back to KUBECONFIG env or ~/.kube/config.
-func getKubeConfig() (*rest.Config, error) {
-	// Try in-cluster config first (when running inside a pod)
-	cfg, err := rest.InClusterConfig()
-	if err == nil {
-		klog.Info("Using in-cluster kubeconfig")
-		return cfg, nil
+func newCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "addon",
+		Short: "basic-addon - OCM addon for collecting pod reports",
+		Run: func(cmd *cobra.Command, args []string) {
+			if err := cmd.Help(); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+			}
+			os.Exit(1)
+		},
 	}
 
-	// Fall back to kubeconfig file (for local development)
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		kubeconfig = clientcmd.RecommendedHomeFile // ~/.kube/config
+	if v := version.Get().String(); len(v) == 0 {
+		cmd.Version = "<unknown>"
+	} else {
+		cmd.Version = v
 	}
 
-	klog.Infof("Using kubeconfig from: %s", kubeconfig)
-	return clientcmd.BuildConfigFromFlags("", kubeconfig)
+	cmd.AddCommand(newControllerCommand())
+	cmd.AddCommand(agent.NewAgentCommand(addon.AddonName))
+
+	return cmd
+}
+
+func newControllerCommand() *cobra.Command {
+	cmd := cmdfactory.
+		NewControllerCommandConfig("basic-addon-controller", version.Get(), runController).
+		NewCommand()
+	cmd.Use = "controller"
+	cmd.Short = "Start the addon controller"
+
+	return cmd
+}
+
+func runController(ctx context.Context, kubeConfig *rest.Config) error {
+	klog.Info("Starting basic-addon controller")
+
+	mgr, err := addonmanager.New(kubeConfig)
+	if err != nil {
+		return err
+	}
+
+	registrationOption := addon.NewRegistrationOption(
+		kubeConfig,
+		addon.AddonName,
+		utilrand.String(5),
+	)
+
+	agentAddon, err := addonfactory.NewAgentAddonFactory(addon.AddonName, addon.FS, "manifests/templates").
+		WithGetValuesFuncs(addon.GetDefaultValues).
+		WithAgentRegistrationOption(registrationOption).
+		WithAgentHealthProber(addon.AgentHealthProber()).
+		BuildTemplateAgentAddon()
+	if err != nil {
+		klog.Errorf("Failed to build agent addon: %v", err)
+		return err
+	}
+
+	err = mgr.AddAgent(agentAddon)
+	if err != nil {
+		return err
+	}
+
+	err = mgr.Start(ctx)
+	if err != nil {
+		return err
+	}
+
+	<-ctx.Done()
+	return nil
 }

@@ -1,16 +1,17 @@
 # addon-framework-basic
 
-Addon OCM básico construído com addon-framework. Serve como template/scaffold para criar addons customizados que deployam agentes em managed clusters.
+Addon OCM que coleta informações de pods dos managed clusters e reporta ao hub. Construído com addon-framework seguindo o padrão do helloworld_agent.
 
 ## Visão geral
 
-O addon demonstra o fluxo completo do addon-framework:
-1. Controller no hub observa `ManagedClusterAddOn`
-2. Gera `ManifestWork` com os manifests do agent
-3. Work agent no spoke aplica os manifests
+O addon demonstra o fluxo completo com comunicação spoke→hub:
+
+1. **Controller** no hub observa `ManagedClusterAddOn` e gera `ManifestWork`
+2. **Agent** é deployado no spoke via ManifestWork
+3. Agent coleta pods do spoke e envia **pod report** para o hub (ConfigMap)
 4. Health prober monitora disponibilidade do deployment
 
-**O que o agent faz:** Loga "Hello from spoke!" a cada 60 segundos (template para evoluir).
+**O que o agent faz:** Coleta todos os pods do spoke e cria/atualiza um ConfigMap `pod-report` no namespace do cluster no hub a cada 60 segundos.
 
 ## Desenvolvimento local
 
@@ -18,7 +19,7 @@ O addon demonstra o fluxo completo do addon-framework:
 
 | Requisito | Descrição |
 |-----------|-----------|
-| Go | Confira no `go.mod` |
+| Go | 1.24+ (confira no `go.mod`) |
 | OCM Hub | Cluster com OCM instalado |
 | Managed Cluster | Pelo menos um spoke registrado e aceito |
 | Kubeconfig | Arquivos de acesso ao hub e spoke |
@@ -28,8 +29,9 @@ O addon demonstra o fluxo completo do addon-framework:
 | Variável | Descrição | Padrão |
 |----------|-----------|--------|
 | `KUBECONFIG` | Kubeconfig do hub cluster | `~/.kube/config` |
-| `IMAGE` | Tag da imagem Docker | `basic-addon:latest` |
-| `CLUSTER` | Nome do managed cluster (para enable/disable) | (obrigatório nos comandos) |
+| `ADDON_IMAGE` | Imagem do addon (controller + agent) | `basic-addon:latest` |
+| `IMAGE` | Tag da imagem Docker (para make) | `basic-addon:latest` |
+| `CLUSTER` | Nome do managed cluster | (obrigatório nos comandos) |
 
 ### Subindo o ambiente
 
@@ -40,7 +42,7 @@ export KUBECONFIG=~/.kube/local/platform-operator/config.hub
 # 2. Aplicar RBAC e ClusterManagementAddOn no hub
 make deploy-rbac
 
-# 3. Rodar controller localmente (como make run do Kubebuilder)
+# 3. Rodar controller localmente
 make run
 ```
 
@@ -71,6 +73,18 @@ kubectl get pods -n open-cluster-management-agent-addon
 kubectl logs -l app=basic-addon-agent -n open-cluster-management-agent-addon
 ```
 
+### Verificando o pod report no hub
+
+```sh
+export KUBECONFIG=~/.kube/local/platform-operator/config.hub
+
+# Ver ConfigMap com report de pods
+make check-report CLUSTER=<nome-do-managed-cluster>
+
+# Ou manualmente
+kubectl get configmap pod-report -n <nome-do-managed-cluster> -o yaml
+```
+
 ### Limpeza
 
 ```sh
@@ -82,18 +96,20 @@ make undeploy
 
 ## Referência
 
-### Makefile targets principais
+### Makefile targets
 
 | Target | O que faz |
 |--------|-----------|
 | `build` | Compila o binário (`bin/addon`) |
 | `run` | Executa controller localmente |
+| `test` | Executa testes unitários |
 | `tidy` | Executa `go mod tidy` |
 | `deploy-rbac` | Aplica RBAC + CMA no hub (para dev local) |
 | `deploy` | Deploy completo (RBAC + controller pod) |
 | `undeploy` | Remove todos os recursos do hub |
 | `enable` | Habilita addon em um cluster (`CLUSTER=xxx`) |
 | `disable` | Desabilita addon de um cluster (`CLUSTER=xxx`) |
+| `check-report` | Exibe pod report de um cluster (`CLUSTER=xxx`) |
 | `docker-build` | Constrói imagem Docker |
 | `docker-push` | Publica imagem Docker |
 
@@ -102,14 +118,25 @@ make undeploy
 ```
 addon-framework-basic/
 ├── cmd/addon/
-│   ├── main.go                 # Controller (roda no hub)
-│   └── manifests/
-│       └── deployment.yaml     # Agent (deployado no spoke)
-├── deploy/                     # Recursos para deploy no hub
+│   └── main.go                      # Entry point (cobra: controller + agent)
+├── pkg/
+│   ├── addon/
+│   │   ├── addon.go                 # Factory functions
+│   │   ├── addon_test.go            # Testes
+│   │   └── manifests/templates/     # Templates do agent (spoke)
+│   │       ├── deployment.yaml
+│   │       ├── serviceaccount.yaml
+│   │       └── clusterrolebinding.yaml
+│   ├── agent/
+│   │   ├── agent.go                 # Agent que coleta pods
+│   │   └── agent_test.go
+│   └── hub/
+│       └── rbac.go                  # RBAC dinâmico no hub
+├── deploy/                          # Recursos para deploy no hub
 │   ├── serviceaccount.yaml
 │   ├── clusterrole.yaml
 │   ├── clusterrolebinding.yaml
-│   ├── deployment.yaml         # Controller pod (produção)
+│   ├── deployment.yaml
 │   └── clustermanagementaddon.yaml
 ├── Dockerfile
 ├── Makefile
@@ -131,6 +158,9 @@ addon-framework-basic/
 
    ```yaml
    image: <registro>/basic-addon:latest
+   env:
+     - name: ADDON_IMAGE
+       value: "<registro>/basic-addon:latest"
    ```
 
 3. Deploy no hub:
@@ -158,30 +188,52 @@ make undeploy
 ```mermaid
 flowchart LR
     subgraph HUB["HUB CLUSTER"]
-        CMA["ClusterManagementAddOn<br/>basic-addon"]
-        MCA["ManagedClusterAddOn<br/>namespace: spoke1"]
-        AC["Addon Controller"]
-        MW["ManifestWork<br/>addon-basic-addon-deploy-0"]
+        CMA["ClusterManagementAddOn"]
+        MCA["ManagedClusterAddOn"]
+        CTRL["Controller<br/>(cobra controller)"]
+        MW["ManifestWork"]
+        CM["ConfigMap<br/>pod-report"]
 
         CMA --> MCA
-        MCA --> AC
-        AC --> MW
+        MCA --> CTRL
+        CTRL -->|"gera"| MW
     end
 
     subgraph SPOKE["SPOKE CLUSTER"]
-        NS["Namespace:<br/>ocm-agent-addon"]
-        DEP["Deployment:<br/>basic-addon-agent"]
-        POD["Pod: busybox<br/>Hello from spoke!"]
+        AGENT["Agent Pod<br/>(cobra agent)"]
+        PODS["Pods<br/>(todos namespaces)"]
 
-        NS --> DEP
-        DEP --> POD
+        PODS -->|"lista"| AGENT
     end
 
-    MW -->|"Work Agent<br/>sincroniza"| DEP
+    MW -->|"Work Agent<br/>sincroniza"| AGENT
+    AGENT -->|"hub-kubeconfig<br/>escreve"| CM
 ```
+
+## Pod Report
+
+O agent envia um ConfigMap `pod-report` para o hub com a seguinte estrutura:
+
+```json
+{
+  "clusterName": "spoke1",
+  "timestamp": "2025-01-15T22:00:00Z",
+  "totalPods": 42,
+  "pods": [
+    {
+      "name": "nginx-xxx",
+      "namespace": "default",
+      "status": "Running",
+      "nodeName": "node1"
+    }
+  ]
+}
+```
+
+A estrutura `PodInfo` é extensível - adicione mais campos conforme necessário em `pkg/agent/agent.go`.
 
 ## Referências
 
 - [OCM Addon Developer Guide](https://open-cluster-management.io/docs/developer-guides/addon/)
 - [addon-framework repository](https://github.com/open-cluster-management-io/addon-framework)
-- Exemplo busybox: `addon-framework/cmd/example/busybox/`
+- Exemplo helloworld_agent: `addon-framework/examples/helloworld_agent/`

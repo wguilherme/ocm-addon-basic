@@ -20,3 +20,8 @@ spec:
         - name: controller
           image: basic-addon:latest
           imagePullPolicy: IfNotPresent
+          args:
+            - "controller"
+          env:
+            - name: ADDON_IMAGE
+              value: "basic-addon:latest"
