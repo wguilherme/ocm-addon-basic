@@ -1,5 +1,6 @@
 IMAGE ?= basic-addon:latest
 HUB_KUBECONFIG ?= ~/.kube/local/platform-operator/config.hub
+SPOKE_KUBECONFIG ?= ~/.kube/local/platform-operator/config.spoke1
 KIND_HUB ?= hub
 KIND_SPOKE ?= spoke1
 
@@ -75,10 +76,15 @@ kind-load:
 	kind load docker-image $(IMAGE) --name $(KIND_HUB)
 	kind load docker-image $(IMAGE) --name $(KIND_SPOKE)
 
-# Apply all specs to hub cluster
+# Apply all specs to hub cluster and restart agents on spokes
 addon-deploy:
 	KUBECONFIG=$(HUB_KUBECONFIG) kubectl apply -f deploy/
 	KUBECONFIG=$(HUB_KUBECONFIG) kubectl rollout restart deployment/basic-addon-controller -n open-cluster-management
+	@echo "Waiting for controller to be ready..."
+	@KUBECONFIG=$(HUB_KUBECONFIG) kubectl wait --for=condition=available deployment/basic-addon-controller -n open-cluster-management --timeout=60s
+	@echo "Restarting agent on spoke..."
+	-KUBECONFIG=$$(eval echo $(SPOKE_KUBECONFIG)) kubectl rollout restart deployment/basic-addon-agent -n open-cluster-management-agent-addon 2>/dev/null || true
+	-KUBECONFIG=$$(eval echo $(SPOKE_KUBECONFIG)) kubectl rollout status deployment/basic-addon-agent -n open-cluster-management-agent-addon --timeout=60s 2>/dev/null || true
 
 # List all pod reports from all spokes
 addon-reports:

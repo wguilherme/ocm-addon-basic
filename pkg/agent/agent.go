@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -90,6 +91,12 @@ func (o *AgentOptions) RunAgent(ctx context.Context, kubeconfig *rest.Config) er
 	}
 	klog.Info("Connected to spoke cluster")
 
+	// Build spoke dynamic client (for ClusterClaim)
+	spokeDynamicClient, err := dynamic.NewForConfig(kubeconfig)
+	if err != nil {
+		return err
+	}
+
 	// Build hub client
 	hubRestConfig, err := clientcmd.BuildConfigFromFlags("", o.HubKubeconfigFile)
 	if err != nil {
@@ -101,14 +108,18 @@ func (o *AgentOptions) RunAgent(ctx context.Context, kubeconfig *rest.Config) er
 	}
 	klog.Infof("Connected to hub cluster, will report to namespace: %s", o.SpokeClusterName)
 
+	// Build hub dynamic client (for AddOn Status and PlacementScore)
+	hubDynamicClient, err := dynamic.NewForConfig(hubRestConfig)
+	if err != nil {
+		return err
+	}
+
 	// Start sync loop
 	ticker := time.NewTicker(SyncInterval)
 	defer ticker.Stop()
 
 	// Run immediately once, then on ticker
-	if err := o.syncPodReport(ctx, spokeClient, hubClient); err != nil {
-		klog.Errorf("Failed to sync pod report: %v", err)
-	}
+	o.runAllSyncs(ctx, spokeClient, hubClient, spokeDynamicClient, hubDynamicClient)
 
 	for {
 		select {
@@ -116,10 +127,31 @@ func (o *AgentOptions) RunAgent(ctx context.Context, kubeconfig *rest.Config) er
 			klog.Info("Agent shutting down")
 			return nil
 		case <-ticker.C:
-			if err := o.syncPodReport(ctx, spokeClient, hubClient); err != nil {
-				klog.Errorf("Failed to sync pod report: %v", err)
-			}
+			o.runAllSyncs(ctx, spokeClient, hubClient, spokeDynamicClient, hubDynamicClient)
 		}
+	}
+}
+
+// runAllSyncs executes all sync operations and logs errors individually.
+func (o *AgentOptions) runAllSyncs(ctx context.Context, spokeClient, hubClient kubernetes.Interface, spokeDynamicClient, hubDynamicClient dynamic.Interface) {
+	// Strategy 1: ConfigMap (existing)
+	if err := o.syncPodReport(ctx, spokeClient, hubClient); err != nil {
+		klog.Errorf("Failed to sync pod report: %v", err)
+	}
+
+	// Strategy 2: AddOn Status
+	if err := o.syncAddonStatus(ctx, spokeClient, hubDynamicClient); err != nil {
+		klog.Errorf("Failed to sync addon status: %v", err)
+	}
+
+	// Strategy 3: AddOnPlacementScore
+	if err := o.syncPlacementScore(ctx, spokeClient, hubDynamicClient); err != nil {
+		klog.Errorf("Failed to sync placement score: %v", err)
+	}
+
+	// Strategy 4: ClusterClaim (applies to spoke, klusterlet syncs to hub)
+	if err := o.syncClusterClaim(ctx, spokeClient, spokeDynamicClient); err != nil {
+		klog.Errorf("Failed to sync cluster claim: %v", err)
 	}
 }
 

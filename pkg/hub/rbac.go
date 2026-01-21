@@ -37,17 +37,23 @@ func AddonRBAC(kubeConfig *rest.Config) agent.PermissionConfigFunc {
 				Namespace: cluster.Name,
 			},
 			Rules: []rbacv1.PolicyRule{
-				// Allow agent to read/write ConfigMaps for pod reports
+				// Strategy 1: Allow agent to read/write ConfigMaps for pod reports
 				{
 					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 					Resources: []string{"configmaps"},
 					APIGroups: []string{""},
 				},
-				// Allow agent to read ManagedClusterAddOns
+				// Strategy 2: Allow agent to read and update ManagedClusterAddOns status
 				{
-					Verbs:     []string{"get", "list", "watch"},
-					Resources: []string{"managedclusteraddons"},
+					Verbs:     []string{"get", "list", "watch", "update", "patch"},
+					Resources: []string{"managedclusteraddons", "managedclusteraddons/status"},
 					APIGroups: []string{"addon.open-cluster-management.io"},
+				},
+				// Strategy 3: Allow agent to create/update AddOnPlacementScores
+				{
+					Verbs:     []string{"get", "list", "watch", "create", "update", "patch"},
+					Resources: []string{"addonplacementscores", "addonplacementscores/status"},
+					APIGroups: []string{"cluster.open-cluster-management.io"},
 				},
 			},
 		}

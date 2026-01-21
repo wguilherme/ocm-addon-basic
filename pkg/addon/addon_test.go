@@ -75,8 +75,31 @@ func TestAgentHealthProber(t *testing.T) {
 		t.Fatal("AgentHealthProber() returned nil")
 	}
 
-	if prober.Type != "DeploymentAvailability" {
-		t.Errorf("AgentHealthProber().Type = %v, want DeploymentAvailability", prober.Type)
+	// Changed from DeploymentAvailability to Work to support Strategy 5: Work Status Feedback
+	if prober.Type != "Work" {
+		t.Errorf("AgentHealthProber().Type = %v, want Work", prober.Type)
+	}
+
+	if prober.WorkProber == nil {
+		t.Fatal("AgentHealthProber().WorkProber is nil, expected WorkHealthProber")
+	}
+
+	if len(prober.WorkProber.ProbeFields) == 0 {
+		t.Error("AgentHealthProber().WorkProber.ProbeFields is empty")
+	}
+
+	// Verify the deployment probe is configured
+	found := false
+	for _, field := range prober.WorkProber.ProbeFields {
+		if field.ResourceIdentifier.Name == "basic-addon-agent" {
+			found = true
+			if len(field.ProbeRules) == 0 {
+				t.Error("ProbeRules for basic-addon-agent is empty")
+			}
+		}
+	}
+	if !found {
+		t.Error("ProbeField for basic-addon-agent not found")
 	}
 }
 

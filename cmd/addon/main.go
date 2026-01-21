@@ -24,6 +24,7 @@ import (
 	"github.com/totvs/addon-framework-basic/pkg/agent"
 )
 
+// esta função serve para 
 func main() {
 	rand.Seed(time.Now().UTC().UnixNano())
 
@@ -33,9 +34,7 @@ func main() {
 	command := newCommand()
 	// teste 
 	if err := command.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		
-		
+		fmt.Fprintf(os.Stderr, "%v\n", err)		
 	}
 }
 
