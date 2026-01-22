@@ -1,3 +1,8 @@
+# ClusterRoleBinding do agent no spoke
+# Dá permissão de cluster-admin ao agent para listar pods de todos os namespaces
+#
+# NOTA: Em produção, considere criar uma ClusterRole mais restritiva
+# com apenas as permissões necessárias (ex: get, list pods)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

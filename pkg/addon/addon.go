@@ -1,3 +1,4 @@
+// Package addon contém a factory do addon (controller no hub).
 package addon
 
 import (
@@ -11,42 +12,43 @@ import (
 	"open-cluster-management.io/addon-framework/pkg/utils"
 	addonapiv1alpha1 "open-cluster-management.io/api/addon/v1alpha1"
 	clusterv1 "open-cluster-management.io/api/cluster/v1"
-	workapiv1 "open-cluster-management.io/api/work/v1"
 
 	"github.com/totvs/addon-framework-basic/pkg/hub"
 )
 
 const (
-	AddonName                    = "basic-addon"
-	DefaultBasicAddonImage       = "basic-addon:latest"
-	InstallationNamespace        = "open-cluster-management-agent-addon"
+	AddonName             = "basic-addon"
+	DefaultImage          = "basic-addon:latest"
+	InstallationNamespace = "open-cluster-management-agent-addon"
 )
 
+// FS contém os templates embarcados (manifests/templates).
+//
 //go:embed manifests
 //go:embed manifests/templates
 var FS embed.FS
 
-// NewRegistrationOption returns the registration option for the addon agent.
-// This enables the agent to get a kubeconfig to communicate with the hub.
+// NewRegistrationOption configura o registro do agent no hub.
+// Fluxo: CSR criado → aprovado via CSRApproveCheck → registration-agent gera kubeconfig
 func NewRegistrationOption(kubeConfig *rest.Config, addonName, agentName string) *agent.RegistrationOption {
 	return &agent.RegistrationOption{
 		CSRConfigurations: agent.KubeClientSignerConfigurations(addonName, agentName),
-		CSRApproveCheck:   utils.DefaultCSRApprover(agentName),
-		PermissionConfig:  hub.AddonRBAC(kubeConfig),
+		CSRApproveCheck:   utils.DefaultCSRApprover(agentName), // aprova automaticamente
+		PermissionConfig:  hub.AddonRBAC(kubeConfig),           // cria Role/RoleBinding no hub
 	}
 }
 
-// GetDefaultValues returns the default values for the addon manifests.
-// These values are injected into the Go templates.
+// GetDefaultValues retorna valores para renderizar os templates.
+// Campos: {{ .KubeConfigSecret }}, {{ .ClusterName }}, {{ .Image }}, {{ .AddonInstallNamespace }}
 func GetDefaultValues(cluster *clusterv1.ManagedCluster,
 	addon *addonapiv1alpha1.ManagedClusterAddOn) (addonfactory.Values, error) {
 
 	image := os.Getenv("ADDON_IMAGE")
-	if len(image) == 0 {
-		image = DefaultBasicAddonImage
+	if image == "" {
+		image = DefaultImage
 	}
 
-	manifestConfig := struct {
+	return addonfactory.StructToValues(struct {
 		KubeConfigSecret string
 		ClusterName      string
 		Image            string
@@ -54,52 +56,13 @@ func GetDefaultValues(cluster *clusterv1.ManagedCluster,
 		KubeConfigSecret: fmt.Sprintf("%s-hub-kubeconfig", addon.Name),
 		ClusterName:      cluster.Name,
 		Image:            image,
-	}
-
-	return addonfactory.StructToValues(manifestConfig), nil
+	}), nil
 }
 
-// AgentHealthProber returns the health prober configuration for the addon.
-// Uses WorkProber with FeedbackRules to demonstrate Strategy 5: Work Status Feedback.
-// This extracts readyReplicas and availableReplicas from the agent deployment.
+// AgentHealthProber retorna o health prober usando Lease.
+// O agent atualiza o Lease no spoke, registration-agent observa e reporta status pro hub.
 func AgentHealthProber() *agent.HealthProber {
 	return &agent.HealthProber{
-		Type: agent.HealthProberTypeWork,
-		WorkProber: &agent.WorkHealthProber{
-			ProbeFields: []agent.ProbeField{
-				{
-					ResourceIdentifier: workapiv1.ResourceIdentifier{
-						Group:     "apps",
-						Resource:  "deployments",
-						Name:      "basic-addon-agent",
-						Namespace: InstallationNamespace,
-					},
-					ProbeRules: []workapiv1.FeedbackRule{
-						{
-							Type: workapiv1.JSONPathsType,
-							JsonPaths: []workapiv1.JsonPath{
-								{Name: "readyReplicas", Path: ".status.readyReplicas"},
-								{Name: "availableReplicas", Path: ".status.availableReplicas"},
-								{Name: "replicas", Path: ".status.replicas"},
-							},
-						},
-					},
-				},
-			},
-			HealthChecker: func(fields []agent.FieldResult, cluster *clusterv1.ManagedCluster,
-				addon *addonapiv1alpha1.ManagedClusterAddOn) error {
-				for _, field := range fields {
-					if field.ResourceIdentifier.Name != "basic-addon-agent" {
-						continue
-					}
-					for _, value := range field.FeedbackResult.Values {
-						if value.Name == "readyReplicas" && value.Value.Integer != nil && *value.Value.Integer >= 1 {
-							return nil
-						}
-					}
-				}
-				return fmt.Errorf("basic-addon agent is not ready")
-			},
-		},
+		Type: agent.HealthProberTypeLease,
 	}
 }

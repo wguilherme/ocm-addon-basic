@@ -1,3 +1,11 @@
+# Deployment do agent no spoke
+# Este manifest é renderizado pelo controller e aplicado via ManifestWork
+#
+# Variáveis disponíveis (injetadas por GetDefaultValues):
+# - {{ .AddonInstallNamespace }}: Namespace de instalação (adicionado automaticamente pelo framework)
+# - {{ .KubeConfigSecret }}: Nome do secret com kubeconfig do hub (criado pelo registration-agent)
+# - {{ .Image }}: Imagem do agent
+# - {{ .ClusterName }}: Nome do spoke cluster
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,6 +25,7 @@ spec:
     spec:
       serviceAccountName: basic-addon-agent-sa
       volumes:
+      # Secret com kubeconfig do hub - criado pelo registration-agent após aprovação do CSR
       - name: hub-config
         secret:
           secretName: {{ .KubeConfigSecret }}
@@ -24,6 +33,11 @@ spec:
       - name: agent
         image: {{ .Image }}
         imagePullPolicy: IfNotPresent
+        # Flags passadas para o agent
+        # - agent: subcomando que inicia o agent
+        # - --hub-kubeconfig: caminho do kubeconfig do hub (montado do secret)
+        # - --cluster-name: nome do spoke cluster (usado como namespace no hub)
+        # - --addon-namespace: namespace onde o agent está instalado (usado para o Lease)
         args:
           - "agent"
           - "--hub-kubeconfig=/var/run/hub/kubeconfig"
