@@ -5,9 +5,4 @@ metadata:
 spec:
   addOnMeta:
     displayName: Basic Addon
-    description: "Basic addon example that logs hello world on managed clusters"
-  installStrategy:
-    type: Placements
-    placements:
-      - name: all-managed-clusters
-        namespace: open-cluster-management
+    description: "Collects pod info from spoke and reports to hub"
