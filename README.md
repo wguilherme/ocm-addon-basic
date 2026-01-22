@@ -54,24 +54,32 @@ make check-report CLUSTER=<nome-do-cluster>
 
 ## Arquitetura
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                         HUB                             │
-│  ┌──────────────┐     ┌────────────────────────────┐   │
-│  │  Controller  │     │ ConfigMap: pod-report      │   │
-│  │              │     │ (namespace: <cluster>)     │   │
-│  └──────────────┘     └────────────────────────────┘   │
-│         │                         ▲                     │
-│         │ ManifestWork            │ hub-kubeconfig      │
-│         ▼                         │                     │
-└─────────────────────────────────────────────────────────┘
-          │                         │
-┌─────────────────────────────────────────────────────────┐
-│                        SPOKE                            │
-│  ┌──────────────┐     ┌────────────────────────────┐   │
-│  │    Agent     │────▶│ Lista pods, monta report   │   │
-│  └──────────────┘     └────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph HUB["HUB Cluster"]
+        Controller["Controller<br/>(addon manager)"]
+        MCA["ManagedClusterAddOn"]
+        MW["ManifestWork"]
+        CM["ConfigMap: pod-report<br/>(ns: spoke-cluster)"]
+
+        Controller -->|observa| MCA
+        Controller -->|gera| MW
+    end
+
+    subgraph SPOKE["SPOKE Cluster"]
+        WA["work-agent"]
+        Agent["Agent"]
+        Lease["Lease"]
+        RA["registration-agent"]
+
+        WA -->|aplica manifests| Agent
+        Agent -->|atualiza| Lease
+        RA -->|observa| Lease
+    end
+
+    MW -->|"sincronizado"| WA
+    Agent -->|"hub-kubeconfig"| CM
+    RA -->|"reporta status"| MCA
 ```
 
 ## Referências
