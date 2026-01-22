@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: basic-addon-agent
+  namespace: {{ .AddonInstallNamespace }}
+  labels:
+    app: basic-addon-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: basic-addon-agent
+  template:
+    metadata:
+      labels:
+        app: basic-addon-agent
+    spec:
+      serviceAccountName: basic-addon-agent-sa
+      volumes:
+      - name: hub-config
+        secret:
+          secretName: {{ .KubeConfigSecret }}
+      containers:
+      - name: agent
+        image: {{ .Image }}
+        imagePullPolicy: IfNotPresent
+        args:
+          - "agent"
+          - "--hub-kubeconfig=/var/run/hub/kubeconfig"
+          - "--cluster-name={{ .ClusterName }}"
+          - "--addon-namespace={{ .AddonInstallNamespace }}"
+        volumeMounts:
+          - name: hub-config
+            mountPath: /var/run/hub
